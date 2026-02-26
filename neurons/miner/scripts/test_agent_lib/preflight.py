@@ -222,14 +222,14 @@ def run_preflight_checks() -> bool:
             console.print()
             console.print(
                 Panel.fit(
-                    f"[yellow]💡 To set up API keys manually, edit:[/yellow]\n"
+                    f"[yellow]To set up API keys manually, edit:[/yellow]\n"
                     f"   [cyan]{GATEWAY_ENV_PATH}[/cyan]\n\n"
-                    "[yellow]Required keys:[/yellow]\n"
-                    "   CHUTES_API_KEY=your_key_here\n"
-                    "   DESEARCH_API_KEY=your_key_here\n\n"
                     "[yellow]Get your keys from:[/yellow]\n"
-                    "   • Chutes: [link=https://chutes.ai]https://chutes.ai[/link]\n"
-                    "   • Desearch: [link=https://desearch.ai]https://desearch.ai[/link]",
+                    "   - Chutes: [link=https://chutes.ai]https://chutes.ai[/link]\n"
+                    "   - Desearch: [link=https://desearch.ai]https://desearch.ai[/link]\n"
+                    "   - OpenAI: [link=https://platform.openai.com/api-keys]https://platform.openai.com/api-keys[/link]\n"
+                    "   - Perplexity: [link=https://www.perplexity.ai/settings/api]https://www.perplexity.ai/settings/api[/link]\n"
+                    "   - Vericore: [link=https://vericore.ai]https://vericore.ai[/link]",
                     border_style="yellow",
                 )
             )

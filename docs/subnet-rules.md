@@ -7,7 +7,7 @@
 This document defines the operational rules, constraints, and scoring mechanisms for the Numinous forecasting subnet. All miners must understand and follow these rules to participate successfully.
 
 The key rules are the following (they will be repeated in context below):
-- **The sandbox times out after 210s**
+- **The sandbox times out after 240s**
 - **The total cost limit on API calls depends on each service and is paid by the miner**
 - **DO NOT include dynamic timestamps or random data in prompts to make sure our caching system is hit across different validator executions**.
 
@@ -71,14 +71,14 @@ Interval 1 (Day 2): Prediction reused → 0.65
 Interval N (Day N): Prediction reused → 0.65
 ```
 
-We do this currently for **efficient ressource usage**. This will change in the future since there is clear benefit in having multiple forecasting schedules. 
+We do this currently for **efficient ressource usage**. This will change in the future since there is clear benefit in having multiple forecasting schedules.
 
 
 ## Resource Limits
 
 | Resource | Limit | Consequence if Exceeded |
 |----------|-------|-------------------------|
-| **Execution Timeout** | 210 seconds | Hard kill, no prediction recorded |
+| **Execution Timeout** | 240 seconds | Hard kill, no prediction recorded |
 | **Code Size** | 2MB | Upload rejected |
 | **Cost Limit** | Depends on service (see linking) | Run exited |
 | **Python Version** | 3.11+ | - |
@@ -86,7 +86,7 @@ We do this currently for **efficient ressource usage**. This will change in the 
 | **Libraries** | Only in `sandbox/requirements.txt` | Import errors |
 
 **Timeout Handling:**
-- Agent killed after 210 seconds
+- Agent killed after 240 seconds
 - No prediction recorded = missing prediction
 - Imputed prediction = 0.5
 - Test locally to avoid this!
@@ -218,7 +218,7 @@ Visit https://chutes.ai/app to see which models are "hot" (have active instances
 
 | Failure Type | Penalty | How to Avoid |
 |--------------|---------|--------------|
-| **Timeout (>210s)** | No prediction, imputed 0.5 → Brier score = 0.25 | Optimize code, test locally, add timeouts to API calls |
+| **Timeout (>240s)** | No prediction, imputed 0.5 → Brier score = 0.25 | Optimize code, test locally, add timeouts to API calls |
 | **Python Error** | No prediction, imputed 0.5 → Brier score = 0.25 | Test with `numi test-agent`, add error handling |
 | **Invalid Output** | No prediction, imputed 0.5 → Brier score = 0.25 | Validate return format: `{"event_id": str, "prediction": float}` |
 | **Out of Range** | Clipped to [0.01, 0.99] | Ensure prediction in [0.0, 1.0] before returning |
@@ -227,7 +227,7 @@ Visit https://chutes.ai/app to see which models are "hot" (have active instances
 | **429 from Chutes** | Rate limit exceeded | Implement exponential backoff, reduce API calls |
 
 ## Missing prediction
-The miner is imputed a prediction of 0.5 in all cases of missing prediction: 
+The miner is imputed a prediction of 0.5 in all cases of missing prediction:
 - for intervals before registration when registering a miner
 - if the code does not return a prediction or fails
 
@@ -246,7 +246,7 @@ The miner is imputed a prediction of 0.5 in all cases of missing prediction:
 - Bittensor coldkey + hotkey pair
 - Registration on subnet (netuid 6 mainnet, 155 testnet)
 - TAO for registration (cost fluctuates based on demand)
-- Immunity period after registration 
+- Immunity period after registration
 
 ## Hotkey Verification
 
@@ -264,7 +264,7 @@ Your submitted code is verified against your registered wallet before execution.
 Yes you'd want to register the closest possible to midnight which is the activation date.
 
 **Q: Does my agent re-execute for every 24hs interval?**
-A: No. At the moment your agent executes **once per event**. The same prediction is automatically reused for all intervals until cutoff. 
+A: No. At the moment your agent executes **once per event**. The same prediction is automatically reused for all intervals until cutoff.
 
 **Q: Can I update a prediction for an event?**
 A: No. Once submitted, predictions are final. To change strategy, submit new agent code (active next day for new events only).
@@ -276,7 +276,7 @@ A: Approximately 100 events per day across all event types.
 A: At the next **00:00 UTC** after submission.
 
 **Q: What happens if my agent times out?**
-A: Execution is killed after 210 seconds. No prediction is recorded. You get imputed prediction of 0.5, resulting in Brier score of 0.25.
+A: Execution is killed after 240 seconds. No prediction is recorded. You get imputed prediction of 0.5, resulting in Brier score of 0.25.
 
 **Q: What if I get a 503 error from Chutes?**
 A: You requested a cold model. Use hot models (check https://chutes.ai/app) and implement exponential backoff retry logic with a fallback.
@@ -291,7 +291,7 @@ A: No, you can submit once every three days, so please ensure you really test it
 Before submitting your agent, ensure:
 
 - ✅ Code implements `agent_main(event_data) -> {"event_id": str, "prediction": float}`
-- ✅ Execution time < 210 seconds (tested locally)
+- ✅ Execution time < 240 seconds (tested locally)
 - ✅ Code size < 2MB
 - ✅ Uses only libraries in `sandbox/requirements.txt`
 - ✅ Returns predictions in [0.0, 1.0] range

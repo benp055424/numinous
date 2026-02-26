@@ -11,6 +11,7 @@ from neurons.miner.gateway.providers.chutes import ChutesClient
 from neurons.miner.gateway.providers.desearch import DesearchClient
 from neurons.miner.gateway.providers.openai import OpenAIClient
 from neurons.miner.gateway.providers.perplexity import PerplexityClient
+from neurons.miner.gateway.providers.vericore import VericoreClient
 from neurons.validator.models import numinous_client as models
 from neurons.validator.models.chutes import ChuteStatus
 from neurons.validator.models.chutes import calculate_cost as calculate_chutes_cost
@@ -18,6 +19,7 @@ from neurons.validator.models.desearch import DesearchEndpoint
 from neurons.validator.models.desearch import calculate_cost as calculate_desearch_cost
 from neurons.validator.models.openai import calculate_cost as calculate_openai_cost
 from neurons.validator.models.perplexity import calculate_cost as calculate_perplexity_cost
+from neurons.validator.models.vericore import calculate_cost as calculate_vericore_cost
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +298,28 @@ async def perplexity_chat_completion(request: models.PerplexityInferenceRequest)
     return models.GatewayPerplexityCompletion(
         **result.model_dump(), cost=calculate_perplexity_cost(request.model, result)
     )
+
+
+@gateway_router.post("/vericore/calculate-rating", response_model=models.GatewayVericoreResponse)
+@cached_gateway_call
+@handle_provider_errors("Vericore")
+async def vericore_calculate_rating(
+    request: models.VericoreCalculateRatingRequest,
+) -> models.GatewayVericoreResponse:
+    api_key = os.getenv("VERICORE_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="VERICORE_API_KEY not configured",
+        )
+
+    client = VericoreClient(api_key=api_key)
+    result = await client.calculate_rating(
+        statement=request.statement,
+        generate_preview=request.generate_preview,
+    )
+
+    return models.GatewayVericoreResponse(**result.model_dump(), cost=calculate_vericore_cost())
 
 
 app.include_router(gateway_router)

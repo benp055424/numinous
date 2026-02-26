@@ -15,6 +15,7 @@ from neurons.miner.scripts.link_chutes import link_chutes_impl
 from neurons.miner.scripts.link_desearch import link_desearch_impl
 from neurons.miner.scripts.link_openai import link_openai_impl
 from neurons.miner.scripts.link_perplexity import link_perplexity_impl
+from neurons.miner.scripts.link_vericore import link_vericore_impl
 from neurons.miner.scripts.numinous_config import ENV_URLS
 from neurons.miner.scripts.wallet_utils import load_keypair, prompt_wallet_selection
 
@@ -33,6 +34,7 @@ def services():
       numi services link chutes       # Link Chutes directly
       numi services link openai       # Link OpenAI directly
       numi services link perplexity   # Link Perplexity directly
+      numi services link vericore     # Link Vericore directly
       numi services unlink <name>     # Unlink a service
 
     \b
@@ -43,6 +45,7 @@ def services():
       numi services link chutes
       numi services link openai
       numi services link perplexity
+      numi services link vericore
       numi services unlink chutes
     """
     pass
@@ -172,6 +175,7 @@ def link(
       - chutes: Link Chutes API key
       - openai: Link OpenAI API key
       - perplexity: Link Perplexity API key
+      - vericore: Link Vericore API key
 
     \b
     Examples:
@@ -180,12 +184,13 @@ def link(
       numi services link chutes         # Link Chutes directly
       numi services link openai         # Link OpenAI directly
       numi services link perplexity     # Link Perplexity directly
+      numi services link vericore       # Link Vericore directly
     """
     if not service_name:
         console.print()
         service_choice = Prompt.ask(
             "[bold cyan]Select service to link[/bold cyan]",
-            choices=["desearch", "chutes", "openai", "perplexity"],
+            choices=["desearch", "chutes", "openai", "perplexity", "vericore"],
             default="desearch",
         )
         service_name = service_choice.lower()
@@ -199,6 +204,8 @@ def link(
         link_openai_impl(wallet, hotkey, env, wallet_path)
     elif service_name == "perplexity":
         link_perplexity_impl(wallet, hotkey, env, wallet_path)
+    elif service_name == "vericore":
+        link_vericore_impl(wallet, hotkey, env, wallet_path)
     else:
         console.print(f"[red]✗ Unknown service:[/red] {service_name}")
         raise click.Abort()

@@ -24,7 +24,9 @@ from neurons.validator.models.numinous_client import (
     PostAgentRunsRequestBody,
     PostPredictionsRequestBody,
     PostScoresRequestBody,
+    VericoreCalculateRatingRequest,
 )
+from neurons.validator.models.vericore import VericoreResponse
 from neurons.validator.utils.config import NuminousEnvType
 from neurons.validator.utils.git import commit_short_hash
 from neurons.validator.utils.logger.logger import NuminousLogger
@@ -358,6 +360,29 @@ class NuminousClient:
 
                 data = await response.json()
                 return AISearchResponse.model_validate(data)
+
+    async def vericore_calculate_rating(
+        self, body: dict | VericoreCalculateRatingRequest
+    ) -> VericoreResponse:
+        if isinstance(body, dict):
+            try:
+                body = VericoreCalculateRatingRequest.model_validate(body)
+            except ValidationError as e:
+                raise ValueError(f"Invalid parameters: {e}")
+
+        data = body.model_dump_json()
+        auth_headers = self.make_auth_headers(data=data)
+
+        async with self.create_session(
+            other_headers={**auth_headers, "Content-Type": "application/json"}
+        ) as session:
+            path = "/api/gateway/vericore/calculate-rating"
+
+            async with session.post(path, data=data) as response:
+                response.raise_for_status()
+
+                data = await response.json()
+                return VericoreResponse.model_validate(data)
 
     async def get_weights(self):
         auth_headers = self.make_get_auth_headers()

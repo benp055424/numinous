@@ -14,12 +14,12 @@ For system architecture details, see [architecture.md](./architecture.md).
 For gateway API reference (Chutes AI, Desearch AI), see [gateway-guide.md](./gateway-guide.md).
 
 The key rules to follow as a miner are the following:
-- **The sandbox times out after 210s**
+- **The sandbox times out after 240s**
 - **The total cost limit on API calls depends on each service and its paid by the miner**
 - **DO NOT include dynamic timestamps or random data in prompts to make sure our caching system is hit across different validator executions**.
 - **A forecasting agent can only be updated at most once every 3 days**
 
-All events are currently 3 days events. The length of the immunity period is 7 days to ensure any time before registration. 
+All events are currently 3 days events. The length of the immunity period is 7 days to ensure any time before registration.
 
 ---
 
@@ -33,12 +33,14 @@ All events are currently 3 days events. The length of the immunity period is 7 d
 - **Desearch AI API key** (for local testing with web/Twitter search)
 - **OpenAI API key** (for local testing with GPT-5 models)
 - **Perplexity API key** (for local testing with reasoning LLMs)
+- **Vericore API key** (for local testing with statement verification)
 
 **Get API Keys:**
 - Chutes AI: https://chutes.ai/app
 - Desearch AI: https://desearch.ai/
 - OpenAI: https://platform.openai.com/api-keys
 - Perplexity: https://www.perplexity.ai/settings/api
+- Vericore: https://vericore.ai
 
 **⚠️ OpenAI Security Recommendation:**
 
@@ -393,6 +395,57 @@ def parse_prediction(text: str) -> float:
     return 0.5
 ```
 
+### Using Vericore (Statement Verification)
+
+```python
+import os
+import httpx
+from typing import Dict, Any
+
+PROXY_URL = os.getenv("SANDBOX_PROXY_URL", "http://sandbox_proxy")
+RUN_ID = os.getenv("RUN_ID")
+
+if not RUN_ID:
+    raise ValueError("RUN_ID environment variable is required but not set")
+
+VERICORE_URL = f"{PROXY_URL}/api/gateway/vericore"
+
+def agent_main(event_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Uses Vericore to verify event statement against web evidence."""
+
+    statement = f"{event_data['title']}. {event_data['description']}"
+
+    response = httpx.post(
+        f"{VERICORE_URL}/calculate-rating",
+        json={
+            "statement": statement,
+            "run_id": RUN_ID,
+        },
+        timeout=120.0,
+    )
+
+    result = response.json()
+    summary = result["evidence_summary"]
+
+    # Use evidence metrics to derive prediction
+    entailment = summary.get("entailment", 0.0)
+    contradiction = summary.get("contradiction", 0.0)
+    neutral = summary.get("neutral", 0.0)
+
+    total = entailment + contradiction + neutral
+    if total > 0:
+        prediction = entailment / total
+    else:
+        prediction = 0.5
+
+    prediction = max(0.0, min(1.0, prediction))
+
+    return {
+        "event_id": event_data["event_id"],
+        "prediction": prediction
+    }
+```
+
 ## Important Notes
 
 1. **Always use `SANDBOX_PROXY_URL`** - Never hardcode API URLs
@@ -461,7 +514,7 @@ Analyze this event: {event_data['description']}"""
 
 ### Timeout Management
 
-**Leave buffer time for retries** - With a 210-second timeout, plan your execution:
+**Leave buffer time for retries** - With a 240-second timeout, plan your execution:
 
 - Multiple retries: Account for exponential backoff delays
 - Fallback logic: Always have a quick fallback (return 0.5) if time runs out
@@ -472,7 +525,7 @@ Analyze this event: {event_data['description']}"""
 import time
 
 start_time = time.time()
-timeout = 200  # Leave 10s buffer before hard 210s limit
+timeout = 230  # Leave 10s buffer before hard 240s limit
 
 def check_time_remaining():
     elapsed = time.time() - start_time
@@ -657,6 +710,19 @@ You'll be prompted for:
 
 **Note:** Perplexity has no free tier. You must link your account to use Perplexity models.
 
+### Vericore (Statement Verification)
+
+Link your Vericore account for evidence-based statement verification:
+
+```bash
+numi services link vericore
+```
+
+You'll be prompted for:
+- Your Vericore API key (get from https://vericore.ai)
+
+**Note:** Vericore has no free tier. You must link your account to use Vericore. Each call costs $0.05.
+
 **Important:** Re-link after each agent upload - each code version needs its own link.
 
 Check your linked services anytime:
@@ -683,6 +749,7 @@ numi services link chutes     # Link Chutes API key
 numi services link desearch   # Link Desearch API key
 numi services link openai     # Link OpenAI API key
 numi services link perplexity # Link Perplexity API key
+numi services link vericore  # Link Vericore API key
 numi services list            # Check linked services
 
 # Local Testing

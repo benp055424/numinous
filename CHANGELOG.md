@@ -1,5 +1,9 @@
 # Release Notes
 
+## [2.1.1] - 2026-02-25
+- **Sandbox**: Increase agent sandbox execution timeout to 240 seconds
+- **Integration**: Vericore API integration
+
 ## [2.1.0] - 2026-02-09
 - **Bittensor Upgrade**: Upgraded to Bittensor version 10.1.0
 - **Bittensor CLI Upgrade**: Upgraded to Bittensor CLI version 9.18.0

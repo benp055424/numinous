@@ -9,10 +9,11 @@ The Gateway API provides miner agents with access to external services during sa
 - **Desearch AI**: Web search, social media search, and content crawling
 - **OpenAI**: GPT-5 series models with built-in web search
 - **Perplexity**: Reasoning LLMs with built-in web search
+- **Vericore**: Statement verification with evidence-based metrics
 
 All requests are cached to optimize performance and reduce costs.
 
-**Cost Limits:** $0.01 (default) or $0.10 (linked account) per sandbox run for Chutes and Desearch. OpenAI: $1.00 per run (requires linked account, no free tier). Perplexity: $0.10 per run (requires linked account, no free tier).
+**Cost Limits:** $0.01 (default) or $0.10 (linked account) per sandbox run for Chutes and Desearch. OpenAI: $1.00 per run (requires linked account, no free tier). Perplexity: $0.10 per run (requires linked account, no free tier). Vericore: $0.10 per run (requires linked account, no free tier).
 
 **Security:** API keys are securely stored using external secret management and never exposed to validators.
 
@@ -1052,6 +1053,127 @@ print(f"Sources: {citations}")
 
 ---
 
+## Vericore Endpoints
+
+Vericore provides statement verification with evidence-based metrics including sentiment, conviction, source credibility, and more.
+
+### POST /api/gateway/vericore/calculate-rating
+
+Verify a statement against web evidence and get detailed metrics.
+
+**URL:** `{SANDBOX_PROXY_URL}/api/gateway/vericore/calculate-rating`
+
+**Request Body:**
+```json
+{
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "statement": "Bitcoin will reach $100k by end of 2026",
+  "generate_preview": false
+}
+```
+
+**Parameters:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `run_id` | string (UUID) | Yes | - | Execution tracking ID from environment |
+| `statement` | string | Yes | - | Statement to verify against web evidence |
+| `generate_preview` | boolean | No | false | Generate a preview URL for the results |
+
+**Response:**
+```json
+{
+  "batch_id": "mlzjxglo15m23k",
+  "request_id": "req-mlzjxgmc4amr6",
+  "preview_url": "",
+  "evidence_summary": {
+    "total_count": 12,
+    "neutral": 37.5,
+    "entailment": 1.03,
+    "contradiction": 61.46,
+    "sentiment": -0.07,
+    "conviction": 0.82,
+    "source_credibility": 0.93,
+    "narrative_momentum": 0.48,
+    "risk_reward_sentiment": -0.15,
+    "political_leaning": 0.0,
+    "catalyst_detection": 0.12,
+    "statements": [
+      {
+        "statement": "Evidence text from source...",
+        "url": "https://example.com/article",
+        "contradiction": 0.87,
+        "neutral": 0.12,
+        "entailment": 0.01,
+        "sentiment": -0.5,
+        "conviction": 0.75,
+        "source_credibility": 0.85,
+        "narrative_momentum": 0.5,
+        "risk_reward_sentiment": -0.5,
+        "political_leaning": 0.0,
+        "catalyst_detection": 0.3
+      }
+    ]
+  },
+  "cost": 0.05
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `batch_id` | string | Batch identifier |
+| `request_id` | string | Request identifier |
+| `preview_url` | string | Preview URL (empty if `generate_preview` is false) |
+| `evidence_summary.total_count` | integer | Number of evidence sources found |
+| `evidence_summary.entailment` | float | Aggregated entailment score |
+| `evidence_summary.contradiction` | float | Aggregated contradiction score |
+| `evidence_summary.sentiment` | float | Aggregated sentiment (-1.0 to 1.0) |
+| `evidence_summary.conviction` | float | Aggregated conviction level |
+| `evidence_summary.source_credibility` | float | Average source credibility |
+| `evidence_summary.statements` | array | Individual evidence sources with per-source metrics |
+
+**Example (using httpx):**
+```python
+import os
+import httpx
+
+PROXY_URL = os.getenv("SANDBOX_PROXY_URL")
+RUN_ID = os.getenv("RUN_ID")
+
+response = httpx.post(
+    f"{PROXY_URL}/api/gateway/vericore/calculate-rating",
+    json={
+        "run_id": RUN_ID,
+        "statement": "Bitcoin will reach $100k by end of 2026",
+    },
+    timeout=120.0,
+)
+
+result = response.json()
+
+summary = result["evidence_summary"]
+total = summary["total_count"]
+contradiction = summary["contradiction"]
+sentiment = summary["sentiment"]
+conviction = summary["conviction"]
+credibility = summary["source_credibility"]
+```
+
+**Error Handling:**
+
+| Status Code | Description | Recommended Action |
+|-------------|-------------|-------------------|
+| 503 | Service Unavailable | Retry with exponential backoff |
+| 429 | Rate limit exceeded | Retry with exponential backoff |
+| 401 | Authentication failed | Contact validator |
+| 500 | Internal server error | Retry with fallback |
+
+**Note:** Vericore has no free tier. You must link your API key to use Vericore. Each call costs $0.05.
+
+---
+
 ## Caching
 
 The gateway implements request-level caching to increase consensus stabilit among validators, optimize performance, reduce API costs.
@@ -1066,7 +1188,7 @@ The gateway implements request-level caching to increase consensus stabilit amon
 - The `run_id` field is excluded from cache key calculation
 - This means identical requests from different executions hit the same cache
 
-This is crucial to increase the consensus stability per validator given the variance of LLMs when hit twice with the same prompt. 
+This is crucial to increase the consensus stability per validator given the variance of LLMs when hit twice with the same prompt.
 
 **Prompt rules**. Use consistent prompts across executions to ensure that the cache is hit. In practice, **DO NOT** include dynamic timestamps or random data in prompts.
 
@@ -1165,14 +1287,14 @@ def query_llm_with_retry(prompt: str, max_retries: int = 3) -> Optional[str]:
 
 ### Timeout Management
 
-Plan your execution time to stay within the 210-second sandbox limit:
+Plan your execution time to stay within the 240-second sandbox limit:
 
 ```python
 import time
 
 start_time = time.time()
 timeout_buffer = 10  # seconds
-max_time = 200  # 210s limit - 10s buffer
+max_time = 230  # 240s limit - 10s buffer
 
 def time_remaining():
     elapsed = time.time() - start_time

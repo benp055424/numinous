@@ -7,41 +7,51 @@ console = Console()
 
 GATEWAY_ENV_PATH = Path("neurons/miner/gateway/.env")
 
+API_KEYS = [
+    ("CHUTES_API_KEY", "Chutes", "https://chutes.ai"),
+    ("DESEARCH_API_KEY", "Desearch", "https://desearch.ai"),
+    ("OPENAI_API_KEY", "OpenAI", "https://platform.openai.com/api-keys"),
+    ("PERPLEXITY_API_KEY", "Perplexity", "https://www.perplexity.ai/settings/api"),
+    ("VERICORE_API_KEY", "Vericore", "https://vericore.ai"),
+]
+
+
+def _is_key_set(env_content: str, key: str) -> bool:
+    if f"{key}=" not in env_content:
+        return False
+    value = env_content.split(f"{key}=")[1].split("\n")[0].strip()
+    return value != ""
+
 
 def check_env_vars() -> dict[str, bool]:
     if not GATEWAY_ENV_PATH.exists():
-        return {"CHUTES_API_KEY": False, "DESEARCH_API_KEY": False}
+        return {key: False for key, _, _ in API_KEYS}
 
     env_content = GATEWAY_ENV_PATH.read_text()
-    return {
-        "CHUTES_API_KEY": "CHUTES_API_KEY=" in env_content
-        and not env_content.split("CHUTES_API_KEY=")[1].split("\n")[0].strip() == "",
-        "DESEARCH_API_KEY": "DESEARCH_API_KEY=" in env_content
-        and not env_content.split("DESEARCH_API_KEY=")[1].split("\n")[0].strip() == "",
-    }
+    return {key: _is_key_set(env_content, key) for key, _, _ in API_KEYS}
 
 
 def setup_api_keys(force_all: bool = False) -> bool:
     console.print()
-    console.print("[cyan]🔑 API Key Setup[/cyan]")
+    console.print("[cyan]API Key Setup[/cyan]")
     console.print()
     console.print("[dim]You can get your API keys from:[/dim]")
-    console.print("[dim]  • Chutes: [link=https://chutes.ai]https://chutes.ai[/link][/dim]")
-    console.print("[dim]  • Desearch: [link=https://desearch.ai]https://desearch.ai[/link][/dim]")
+    for _, name, url in API_KEYS:
+        console.print(f"[dim]  - {name}: [link={url}]{url}[/link][/dim]")
     console.print()
 
     env_status = check_env_vars()
 
-    chutes_key = None
-    desearch_key = None
+    keys_to_set: dict[str, str] = {}
 
-    if not env_status["CHUTES_API_KEY"] or force_all:
-        chutes_key = Prompt.ask("[cyan]Chutes API Key[/cyan]")
-        chutes_key = chutes_key.strip() if chutes_key else None
-
-    if not env_status["DESEARCH_API_KEY"] or force_all:
-        desearch_key = Prompt.ask("[cyan]Desearch API Key[/cyan]")
-        desearch_key = desearch_key.strip() if desearch_key else None
+    for env_var, name, _ in API_KEYS:
+        if not env_status[env_var] or force_all:
+            value = Prompt.ask(
+                f"[cyan]{name} API Key[/cyan] [dim](Enter to skip)[/dim]", default=""
+            )
+            value = value.strip() if value else ""
+            if value:
+                keys_to_set[env_var] = value
 
     existing_content = ""
     if GATEWAY_ENV_PATH.exists():
@@ -60,11 +70,8 @@ def setup_api_keys(force_all: bool = False) -> bool:
             lines.append(f"{key}={value}")
         return lines
 
-    if chutes_key:
-        lines = update_or_add_key(lines, "CHUTES_API_KEY", chutes_key)
-
-    if desearch_key:
-        lines = update_or_add_key(lines, "DESEARCH_API_KEY", desearch_key)
+    for env_var, value in keys_to_set.items():
+        lines = update_or_add_key(lines, env_var, value)
 
     try:
         GATEWAY_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -76,13 +83,13 @@ def setup_api_keys(force_all: bool = False) -> bool:
         GATEWAY_ENV_PATH.write_text(new_content)
 
         console.print()
-        console.print(f"[green]✓[/green] API keys saved to [cyan]{GATEWAY_ENV_PATH}[/cyan]")
+        console.print(f"[green]OK[/green] API keys saved to [cyan]{GATEWAY_ENV_PATH}[/cyan]")
         console.print()
 
         return True
 
     except Exception as e:
         console.print()
-        console.print(f"[red]✗[/red] Failed to save API keys: {e}")
+        console.print(f"[red]Failed to save API keys: {e}[/red]")
         console.print()
         return False

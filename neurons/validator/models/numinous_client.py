@@ -20,6 +20,7 @@ from neurons.validator.models.desearch import (
 )
 from neurons.validator.models.openai import OpenAIResponse
 from neurons.validator.models.perplexity import PerplexityCompletion
+from neurons.validator.models.vericore import VericoreResponse
 
 
 class NuminousEvent(BaseModel):
@@ -370,6 +371,15 @@ class PerplexityInferenceRequest(GatewayCall):
 
 
 class GatewayPerplexityCompletion(PerplexityCompletion, GatewayCallResponse):
+    pass
+
+
+class VericoreCalculateRatingRequest(GatewayCall):
+    statement: str = Field(..., description="Statement to verify")
+    generate_preview: bool = Field(default=False, description="Generate a preview URL")
+
+
+class GatewayVericoreResponse(VericoreResponse, GatewayCallResponse):
     pass
 
 

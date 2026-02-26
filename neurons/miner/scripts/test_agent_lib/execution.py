@@ -14,7 +14,7 @@ from neurons.validator.utils.logger.logger import NuminousLogger
 
 console = Console()
 
-SANDBOX_TIMEOUT_SECONDS = 210
+SANDBOX_TIMEOUT_SECONDS = 240
 
 
 def get_gateway_url() -> str:

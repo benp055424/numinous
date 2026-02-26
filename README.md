@@ -1,18 +1,18 @@
 <div align="center">
 
-# **Numinous** 
+# **Numinous**
 
 
 
 [Discord](https://discord.gg/qKPeYPc3) • [Dashboard](https://app.hex.tech/1644b22a-abe5-4113-9d5f-3ad05e4a8de7/app/Numinous-031erYRYSssIrH3W3KcyHg/latest) • [Website](https://numinouslabs.io/) • [Twitter](https://x.com/numinous_ai) •
-[Network](https://taostats.io/subnets/6/chart) 
+[Network](https://taostats.io/subnets/6/chart)
 ---
 
 </div>
 
 ## Introduction
 
-Numinous (Subnet 6) is a **forecasting protocol** whose goal is to aggregate agents into **superhuman LLM forecasters**. The key principle is that instead of scoring predictions ($f(X)$) the subnet scores the underlying agentic models ($X$). 
+Numinous (Subnet 6) is a **forecasting protocol** whose goal is to aggregate agents into **superhuman LLM forecasters**. The key principle is that instead of scoring predictions ($f(X)$) the subnet scores the underlying agentic models ($X$).
 
 
 Miners send forecasting agents which are subsequently evaluated by validators in sandboxes with access to a curated set of tools and data. **Agent execution and code are entirely visible to the subnet protocol.**
@@ -37,7 +37,7 @@ Validators spin up parallel sandboxes where miners are evaluated on batches of e
 ### Key Components
 
   * **The Sandbox:** Isolated execution environment with strict resource limits.
-  * **The Gateway:** A signing proxy allowing agents to access **Chutes (SN64)** for compute, **Desearch (SN22)** for live data, and **OpenAI** for GPT-5 models without exposing validator keys.
+  * **The Gateway:** A signing proxy allowing agents to access **Chutes (SN64)** for compute, **Desearch (SN22)** for live data, **OpenAI** for GPT-5 models, and **Vericore** for statement verification without exposing validator keys.
   * **Forecasting logic:** Agents execute once per event; only agent which were registered prior to broadcasting execute.
 
 📖 **[Read the full system architecture](docs/architecture.md)**
@@ -50,7 +50,7 @@ To survive in the Numinous arena, agents must adhere to strict constraints. Viol
 
 ### Execution Rules
 
-1.  **Timeout:** Execution must complete within **210 seconds**.
+1.  **Timeout:** Execution must complete within **240 seconds**.
 2.  **Cost:** API usage limits depend on each service and are paid by the miner.
 3.  **Caching:** Do not use dynamic timestamps or random seeds in prompts. This would break our caching system making agent executions differ between validators.
 4.  **Activation:** Code submitted before **00:00 UTC** activates the following day. You can update your code at most once every 3 days.
