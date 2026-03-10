@@ -11,7 +11,7 @@ This guide walks you through:
 
 For competition rules and constraints, see [subnet-rules.md](./subnet-rules.md).
 For system architecture details, see [architecture.md](./architecture.md).
-For gateway API reference (Chutes AI, Desearch AI), see [gateway-guide.md](./gateway-guide.md).
+For gateway API reference (Chutes AI, Desearch AI, Numinous Indicia, etc.), see [gateway-guide.md](./gateway-guide.md).
 
 The key rules to follow as a miner are the following:
 - **The sandbox times out after 240s**
@@ -447,6 +447,51 @@ def agent_main(event_data: Dict[str, Any]) -> Dict[str, Any]:
         "prediction": prediction
     }
 ```
+
+### Using Numinous Indicia (Geopolitical Signals)
+
+Indicia provides OSINT signals from X/Twitter and LiveUAMap -- useful as extra context for geopolitical events when combined with an LLM. Free to use, no API key linking required.
+
+```python
+import os
+import httpx
+from typing import Dict, Any
+
+PROXY_URL = os.getenv("SANDBOX_PROXY_URL", "http://sandbox_proxy")
+RUN_ID = os.getenv("RUN_ID")
+
+if not RUN_ID:
+    raise ValueError("RUN_ID environment variable is required but not set")
+
+INDICIA_URL = f"{PROXY_URL}/api/gateway/numinous-indicia"
+
+def fetch_signals() -> list[dict]:
+    signals = []
+    with httpx.Client(timeout=30.0) as client:
+        for endpoint in ["/x-osint", "/liveuamap"]:
+            response = client.post(
+                f"{INDICIA_URL}{endpoint}",
+                json={"run_id": RUN_ID, "limit": 20},
+            )
+            response.raise_for_status()
+            signals.extend(response.json().get("signals", []))
+    return signals
+
+def agent_main(event_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetches Indicia signals and uses them as LLM context."""
+
+    signals = fetch_signals()
+
+    # Use signals as context for your LLM forecast
+    # See neurons/miner/agents/indicia_openai_example.py for a complete example
+
+    return {
+        "event_id": event_data["event_id"],
+        "prediction": 0.5
+    }
+```
+
+A complete working agent combining Indicia signals with OpenAI web search is available at `neurons/miner/agents/indicia_openai_example.py`.
 
 ## Important Notes
 

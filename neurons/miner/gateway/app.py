@@ -9,6 +9,7 @@ from neurons.miner.gateway.cache import cached_gateway_call
 from neurons.miner.gateway.error_handler import handle_provider_errors
 from neurons.miner.gateway.providers.chutes import ChutesClient
 from neurons.miner.gateway.providers.desearch import DesearchClient
+from neurons.miner.gateway.providers.numinous_indicia import NuminousIndiciaClient
 from neurons.miner.gateway.providers.openai import OpenAIClient
 from neurons.miner.gateway.providers.openrouter import OpenRouterClient
 from neurons.miner.gateway.providers.perplexity import PerplexityClient
@@ -18,6 +19,9 @@ from neurons.validator.models.chutes import ChuteStatus
 from neurons.validator.models.chutes import calculate_cost as calculate_chutes_cost
 from neurons.validator.models.desearch import DesearchEndpoint
 from neurons.validator.models.desearch import calculate_cost as calculate_desearch_cost
+from neurons.validator.models.numinous_indicia import (
+    calculate_cost as calculate_numinous_indicia_cost,
+)
 from neurons.validator.models.openai import calculate_cost as calculate_openai_cost
 from neurons.validator.models.openrouter import calculate_cost as calculate_openrouter_cost
 from neurons.validator.models.perplexity import calculate_cost as calculate_perplexity_cost
@@ -353,6 +357,40 @@ async def openrouter_chat_completion(
 
     return models.GatewayOpenRouterCompletion(
         **result.model_dump(), cost=calculate_openrouter_cost(result)
+    )
+
+
+@gateway_router.post(
+    "/numinous-indicia/x-osint",
+    response_model=models.GatewayNuminousIndiciaSignalsResponse,
+)
+@cached_gateway_call
+@handle_provider_errors("NuminousIndicia")
+async def numinous_indicia_x_osint(
+    request: models.NuminousIndiciaXOsintRequest,
+) -> models.GatewayNuminousIndiciaSignalsResponse:
+    client = NuminousIndiciaClient()
+    signals = await client.x_osint(account=request.account, limit=request.limit)
+
+    return models.GatewayNuminousIndiciaSignalsResponse(
+        signals=signals, cost=float(calculate_numinous_indicia_cost())
+    )
+
+
+@gateway_router.post(
+    "/numinous-indicia/liveuamap",
+    response_model=models.GatewayNuminousIndiciaSignalsResponse,
+)
+@cached_gateway_call
+@handle_provider_errors("NuminousIndicia")
+async def numinous_indicia_liveuamap(
+    request: models.NuminousIndiciaLiveuamapRequest,
+) -> models.GatewayNuminousIndiciaSignalsResponse:
+    client = NuminousIndiciaClient()
+    signals = await client.liveuamap(region=request.region, limit=request.limit)
+
+    return models.GatewayNuminousIndiciaSignalsResponse(
+        signals=signals, cost=float(calculate_numinous_indicia_cost())
     )
 
 

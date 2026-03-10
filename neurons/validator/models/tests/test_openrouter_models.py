@@ -2,12 +2,9 @@ from decimal import Decimal
 
 from neurons.validator.models.chutes import ChatCompletionChoice, ChatCompletionMessage
 from neurons.validator.models.openrouter import (
-    DEFAULT_PRICING,
-    OPENROUTER_MODEL_PRICING,
     OpenRouterCompletion,
     OpenRouterUsage,
     calculate_cost,
-    estimate_cost_from_tokens,
 )
 
 
@@ -89,25 +86,6 @@ class TestOpenRouterCompletion:
         assert completion.model_extra["system_fingerprint"] == "abc"
 
 
-class TestModelPricing:
-    def test_known_models_exist(self):
-        assert "anthropic/claude-sonnet-4-6" in OPENROUTER_MODEL_PRICING
-        assert "anthropic/claude-opus-4-6" in OPENROUTER_MODEL_PRICING
-        assert "anthropic/claude-haiku-4-5" in OPENROUTER_MODEL_PRICING
-        assert "google/gemini-2.5-pro" in OPENROUTER_MODEL_PRICING
-        assert "google/gemini-2.5-flash" in OPENROUTER_MODEL_PRICING
-
-    def test_pricing_format(self):
-        for model, (input_cost, output_cost) in OPENROUTER_MODEL_PRICING.items():
-            assert isinstance(input_cost, float), f"{model} input_cost not float"
-            assert isinstance(output_cost, float), f"{model} output_cost not float"
-            assert input_cost > 0, f"{model} input_cost not positive"
-            assert output_cost > 0, f"{model} output_cost not positive"
-
-    def test_default_pricing(self):
-        assert DEFAULT_PRICING == (3.0, 15.0)
-
-
 class TestCalculateCost:
     def _make_completion(self, usage=None) -> OpenRouterCompletion:
         return OpenRouterCompletion(
@@ -159,28 +137,3 @@ class TestCalculateCost:
             )
         )
         assert calculate_cost(completion) == Decimal("0")
-
-
-class TestEstimateCostFromTokens:
-    def test_known_model(self):
-        cost = estimate_cost_from_tokens("anthropic/claude-sonnet-4-6", 1000, 500)
-        expected = Decimal(str((3.0 * 1000 + 15.0 * 500) / 1_000_000))
-        assert cost == expected
-
-    def test_unknown_model_uses_default(self):
-        cost = estimate_cost_from_tokens("unknown/model", 1000, 500)
-        expected = Decimal(str((3.0 * 1000 + 15.0 * 500) / 1_000_000))
-        assert cost == expected
-
-    def test_zero_tokens(self):
-        cost = estimate_cost_from_tokens("anthropic/claude-sonnet-4-6", 0, 0)
-        assert cost == Decimal("0")
-
-    def test_cheap_model(self):
-        cost = estimate_cost_from_tokens("google/gemini-2.5-flash-lite", 1_000_000, 1_000_000)
-        assert cost == Decimal("0.375")
-
-    def test_expensive_model(self):
-        cost = estimate_cost_from_tokens("anthropic/claude-opus-4-6", 1000, 500)
-        expected = Decimal(str((15.0 * 1000 + 75.0 * 500) / 1_000_000))
-        assert cost == expected

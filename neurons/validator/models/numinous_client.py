@@ -18,6 +18,7 @@ from neurons.validator.models.desearch import (
     XPostResponse,
     XPostSummary,
 )
+from neurons.validator.models.numinous_indicia import IndiciaSignalsResponse
 from neurons.validator.models.openai import OpenAIResponse
 from neurons.validator.models.openrouter import OpenRouterCompletion
 from neurons.validator.models.perplexity import PerplexityCompletion
@@ -410,6 +411,20 @@ class VericoreCalculateRatingRequest(GatewayCall):
 
 
 class GatewayVericoreResponse(VericoreResponse, GatewayCallResponse):
+    pass
+
+
+class NuminousIndiciaXOsintRequest(GatewayCall):
+    account: typing.Optional[str] = None
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class NuminousIndiciaLiveuamapRequest(GatewayCall):
+    region: typing.Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class GatewayNuminousIndiciaSignalsResponse(IndiciaSignalsResponse, GatewayCallResponse):
     pass
 
 

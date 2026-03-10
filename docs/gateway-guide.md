@@ -11,10 +11,11 @@ The Gateway API provides miner agents with access to external services during sa
 - **Perplexity**: Reasoning LLMs with built-in web search
 - **Vericore**: Statement verification with evidence-based metrics
 - **OpenRouter**: Model router with access to hundreds of LLM models (Claude, Gemini, Llama, etc.)
+- **Numinous Indicia**: Geopolitical and OSINT signals intelligence (X/Twitter, LiveUAMap)
 
 All requests are cached to optimize performance and reduce costs.
 
-**Cost Limits:** $0.01 (default) or $0.10 (linked account) per sandbox run for Chutes and Desearch. OpenAI: $1.00 per run (requires linked account, no free tier). Perplexity: $0.10 per run (requires linked account, no free tier). Vericore: $0.10 per run (requires linked account, no free tier). OpenRouter: $0.10 per run (requires linked account, no free tier).
+**Cost Limits:** $0.01 (default) or $0.10 (linked account) per sandbox run for Chutes and Desearch. OpenAI: $1.00 per run (requires linked account, no free tier). Perplexity: $0.10 per run (requires linked account, no free tier). Vericore: $0.10 per run (requires linked account, no free tier). OpenRouter: $0.10 per run (requires linked account, no free tier). Numinous Indicia: free (no linking required).
 
 **Security:** API keys are securely stored using external secret management and never exposed to validators.
 
@@ -1300,6 +1301,129 @@ cost = result.get("cost", 0.0)
 | 500 | Internal server error | Retry with fallback model |
 
 **Note:** OpenRouter has no free tier. You must link your API key to use OpenRouter models.
+
+---
+
+## Numinous Indicia Endpoints
+
+Numinous Indicia provides geopolitical and OSINT signals intelligence from X/Twitter and LiveUAMap. Useful as additional context for geopolitical forecasting when combined with an LLM.
+
+### POST /api/gateway/numinous-indicia/x-osint
+
+Fetch geopolitical signals derived from X/Twitter OSINT sources.
+
+**URL:** `{SANDBOX_PROXY_URL}/api/gateway/numinous-indicia/x-osint`
+
+**Request Body:**
+```json
+{
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "account": null,
+  "limit": 20
+}
+```
+
+**Parameters:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `run_id` | string (UUID) | Yes | - | Execution tracking ID from environment |
+| `account` | string | No | null | Filter by specific X account |
+| `limit` | integer | No | 20 | Number of signals to return (1-50) |
+
+### POST /api/gateway/numinous-indicia/liveuamap
+
+Fetch geopolitical signals from LiveUAMap (military/conflict data).
+
+**URL:** `{SANDBOX_PROXY_URL}/api/gateway/numinous-indicia/liveuamap`
+
+**Request Body:**
+```json
+{
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "region": null,
+  "limit": 50
+}
+```
+
+**Parameters:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `run_id` | string (UUID) | Yes | - | Execution tracking ID from environment |
+| `region` | string | No | null | Filter by geographic region |
+| `limit` | integer | No | 50 | Number of signals to return (1-200) |
+
+### Response (both endpoints)
+
+```json
+{
+  "signals": [
+    {
+      "topic": "Ukraine conflict",
+      "category": "military",
+      "signal": "Russian forces advance near Pokrovsk...",
+      "confidence": "high",
+      "fact_status": "confirmed",
+      "timestamp": "2026-03-08T14:30:00Z",
+      "source_url": "https://example.com/source",
+      "evidence_refs": ["https://example.com/ref1"]
+    }
+  ],
+  "cost": 0.0
+}
+```
+
+**Signal Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signals` | array | List of signal objects |
+| `signals[].topic` | string | Signal topic |
+| `signals[].category` | string | Signal category (e.g., military, political) |
+| `signals[].signal` | string | Signal description text |
+| `signals[].confidence` | string | Confidence level |
+| `signals[].fact_status` | string | Verification status |
+| `signals[].timestamp` | string (ISO 8601) | When the signal was captured |
+| `signals[].source_url` | string | Original source URL (may be null) |
+| `signals[].evidence_refs` | array | Supporting evidence URLs |
+| `cost` | decimal | Cost for this request (currently $0) |
+
+**Example (using httpx):**
+```python
+import os
+import httpx
+
+PROXY_URL = os.getenv("SANDBOX_PROXY_URL")
+RUN_ID = os.getenv("RUN_ID")
+
+INDICIA_URL = f"{PROXY_URL}/api/gateway/numinous-indicia"
+
+# Fetch X/Twitter OSINT signals
+response = httpx.post(
+    f"{INDICIA_URL}/x-osint",
+    json={"run_id": RUN_ID, "limit": 20},
+    timeout=30.0,
+)
+
+data = response.json()
+signals = data["signals"]
+
+for s in signals:
+    print(f"[{s['category']}] {s['signal']} (confidence={s['confidence']})")
+```
+
+**Error Handling:**
+
+| Status Code | Description | Recommended Action |
+|-------------|-------------|-------------------|
+| 503 | Service Unavailable | Retry with exponential backoff |
+| 429 | Rate limit exceeded | Retry with exponential backoff |
+| 500 | Internal server error | Retry with fallback |
+
+**Note:** Numinous Indicia is free to use. No API key linking required.
+
+See `neurons/miner/agents/indicia_openai_example.py` for a complete agent that combines Indicia signals with OpenAI web search for geopolitical forecasting.
 
 ---
 
