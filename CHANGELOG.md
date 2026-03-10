@@ -1,5 +1,8 @@
 # Release Notes
 
+## [2.1.3] - 2026-03-06
+- **Integration**: Numinous Indicia signals API integration (X-OSINT and LiveUAMap geopolitical intelligence)
+
 ## [2.1.2] - 2026-03-02
 - **Integration**: OpenRouter API integration
 
