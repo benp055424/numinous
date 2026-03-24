@@ -19,4 +19,4 @@ RUN pip install -e .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "[neurons.miner.gateway.app](https://neurons.miner.gateway.app):app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "neurons.miner.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
