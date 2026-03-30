@@ -1,15 +1,33 @@
 """
-Numinous SN6 — v8 (Segment-Routed Ensemble)
-=============================================
-Major upgrades over v7:
-  - Segment routing: geo_strikes / weather / app_store / sports / general
-  - Geo-strikes: static anchors + city adjustments (no LLM guessing)
-  - App store: incumbent win-rate table + Polymarket slot races
-  - Weather: sigmoid recalibration to fix negative bias
-  - Polymarket: /public-search events API for exact match (not keyword market search)
-  - gpt-4o (upgraded from gpt-4o-mini) with web_search tool
-  - Removed crude affirm/negate web signal (noisy, hurts calibration)
-  - Weighted geometric pooling with segment-aware weights
+Numinous SN6 — v8.1 (Optimized Ensemble)
+==========================================
+Major changes from v8.0 based on competitive intelligence (top 5 miners analysis):
+
+  Bias fixes (measured -0.048 negative bias):
+  - BASE_RATE 0.35 → 0.43 (all top miners have positive bias)
+  - SHRINK_FRACTION 0.15 → 0.10
+  - Post-ensemble debiasing +0.04 in logit space
+  - iran_diplomatic 0.05 → 0.15
+
+  Model upgrades (matching #1 miner SirMutton):
+  - OpenAI: gpt-4o → gpt-5-mini (used by #1, #3, #5 miners)
+  - Added OpenRouter Claude fallback (used by #5 miner)
+  - Chutes primary unchanged (Qwen3-235B proven good)
+
+  Technique upgrades (from #1 SirMutton + #5 flynn0509):
+  - Extremizing transform (Satopää et al.) after ensemble pooling
+  - Indicia OSINT (LiveUAMap) for geo events (used by #1, free)
+  - Polymarket via Desearch crawl (more reliable in sandbox, used by #1 and #5)
+  - Sphere-based search hint generation (from #1)
+  - Stronger probability parser (handles more output formats)
+
+  Weather fix:
+  - Broken sigmoid (mapped 0.5→0.21) replaced with logit-space shift
+
+  Pool strategy (current weights: Global 55%, Geo 20%, Finance 15%, Sports 5%, Crypto 5%):
+  - Geo pool (20%) is key target — Indicia + anchors + LLM leash
+  - Finance pool (15%) — Polymarket passthrough for scored-against-PM events
+  - Global pool (55%) — best overall Brier across all events
 """
 
 import asyncio
@@ -17,33 +35,39 @@ import json
 import math
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import httpx
 
 # ── env ───────────────────────────────────────────────────────────────────────
-GATEWAY   = os.environ.get("SANDBOX_PROXY_URL", "http://sandbox_proxy").rstrip("/")
-SESSION   = os.environ.get("RUN_ID", "v8-session")
-UTC_TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+GATEWAY = os.environ.get("SANDBOX_PROXY_URL", "http://sandbox_proxy").rstrip("/")
+RUN_ID  = os.environ.get("RUN_ID") or str(uuid4())
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
-PATH_CHUTES   = GATEWAY + "/api/gateway/chutes/chat/completions"
-PATH_OAI      = GATEWAY + "/api/gateway/openai/responses"
-PATH_DESEARCH = GATEWAY + "/api/gateway/desearch/search"
-GAMMA_PROXY   = GATEWAY + "/api/gateway/desearch"   # polymarket via crawl fallback
-GAMMA_API     = "https://gamma-api.polymarket.com"
+PATH_OAI       = GATEWAY + "/api/gateway/openai/responses"
+PATH_CHUTES    = GATEWAY + "/api/gateway/chutes/chat/completions"
+PATH_OPENROUTER = GATEWAY + "/api/gateway/openrouter/chat/completions"
+PATH_DESEARCH  = GATEWAY + "/api/gateway/desearch/search"
+PATH_CRAWL     = GATEWAY + "/api/gateway/desearch/web/crawl"
+PATH_INDICIA   = GATEWAY + "/api/gateway/numinous-indicia"
+GAMMA_API      = "https://gamma-api.polymarket.com"
 
 # ── models ────────────────────────────────────────────────────────────────────
-MODEL_OAI_PRIMARY     = "gpt-4o"
-MODEL_CHUTES_PRIMARY  = "Qwen/Qwen3-235B-A22B-Instruct-2507"
-MODEL_CHUTES_FALLBACK = "deepseek-ai/DeepSeek-V3-0324"
+MODEL_OAI_PRIMARY      = "gpt-5-mini"
+MODEL_CHUTES_PRIMARY   = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+MODEL_CHUTES_FALLBACK  = "deepseek-ai/DeepSeek-V3-0324"
+MODEL_OPENROUTER       = "anthropic/claude-sonnet-4-6"
 
 # ── calibration ───────────────────────────────────────────────────────────────
-BASE_RATE        = 0.35
-PROB_FLOOR       = 0.02
-PROB_CEIL        = 0.98
-SHRINK_FRACTION  = 0.15
+BASE_RATE       = 0.43
+PROB_FLOOR      = 0.02
+PROB_CEIL       = 0.98
+SHRINK_FRACTION = 0.10
+DEBIAS_LOGIT    = 0.16
+EXTREMIZE_D     = 1.2
 
 # ── stopwords ─────────────────────────────────────────────────────────────────
 _STOP = frozenset(
@@ -52,14 +76,54 @@ _STOP = frozenset(
     "have has had could would should may might must end between".split()
 )
 
-# ── segment detection ─────────────────────────────────────────────────────────
+# ── timing ────────────────────────────────────────────────────────────────────
+_start_time = None
+
+def _elapsed():
+    return time.time() - _start_time if _start_time else 0
+
+def _budget_left():
+    return max(0, 220 - _elapsed())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Segment detection
+# ═══════════════════════════════════════════════════════════════════════════════
+
 _GEO_GENERAL = frozenset({"geopolitics", "politics", "iran", "middle east",
-                           "elections", "primaries", "global elections"})
+                           "elections", "primaries", "global elections",
+                           "world elections", "regional spillover"})
 _IRAN_KIN_RE = re.compile(
     r"retaliate with.*strike|launch.*rocket|launch.*attack|fire rocket"
     r"|sirens sound|missile strike.*on|strike.*in response"
     r"|drone strike|missile strike|military strike|artillery strike"
     r"|drone attack|air\s?strike|experience.*strike|experience.*attack", re.I)
+
+_SPHERES = (
+    ("athletics", frozenset({"MATCH", "GAME", "WIN", "VS", "CHAMPIONSHIP", "LEAGUE", "CUP", "PLAYOFF", "GOAL", "SCORE"})),
+    ("governance", frozenset({"ELECTION", "VOTE", "POLL", "PRESIDENT", "GOVERNOR", "SENATOR", "MAYOR", "TARIFF", "SANCTION", "WAR", "TREATY"})),
+    ("financial", frozenset({"RATE", "FED", "GDP", "INFLATION", "BITCOIN", "CRYPTO", "PRICE", "MARKET", "$", "STOCK"})),
+    ("technology", frozenset({"LAUNCH", "RELEASE", "APP", "SOFTWARE", "UPDATE", "SHIP", "ANNOUNCE"})),
+    ("showbusiness", frozenset({"MOVIE", "FILM", "OSCAR", "GRAMMY", "EMMY", "ALBUM", "BOX OFFICE", "AWARD"})),
+)
+
+_SPHERE_HINTS = {
+    "athletics": ("betting odds", "injuries", "recent form", "head-to-head", "standings"),
+    "governance": ("Polymarket", "polling", "official statement", "Reuters AP"),
+    "financial": ("FedWatch", "central bank", "market expectations", "economic data"),
+    "technology": ("official blog", "press release", "SEC filing", "launch date"),
+    "showbusiness": ("box office", "reviews", "awards predictions", "release date"),
+    "general": ("Polymarket", "recent news", "official source"),
+}
+
+
+def _get_sphere(record: dict) -> str:
+    blob = (record.get("title", "") + " " + record.get("description", "")).upper()
+    for label, terms in _SPHERES:
+        for term in terms:
+            if term in blob:
+                return label
+    return "general"
 
 
 def classify_segment(record: dict) -> str:
@@ -84,14 +148,18 @@ def classify_segment(record: dict) -> str:
 
     if "election" in blob:
         return "election"
-    if any(m in blob for m in (" vs ", " vs. ", "cricket", "both teams to score")) or " win?" in tl:
+    if any(m in blob for m in (" vs ", " vs. ", "cricket", "both teams to score", "upcoming game", "stoppage time")) or " win?" in tl or " win " in tl:
         return "sports"
-    if "app store" in blob:
+    if "app store" in blob or " app " in blob:
         return "app_store"
     if " temperature " in blob:
         return "weather"
-    if "earnings" in blob:
+    if "earnings" in blob or (any(q in blob for q in ("q1", "q2", "q3", "q4")) and "above" in blob):
         return "earnings"
+    if "inflation" in blob:
+        return "inflation"
+    if " price of " in blob:
+        return "price"
     return "general"
 
 
@@ -131,36 +199,43 @@ def shrink(p: float, frac: float = SHRINK_FRACTION) -> float:
     return clamp((1.0 - frac) * p + frac * BASE_RATE)
 
 
+def extremize(p: float, d: float = EXTREMIZE_D) -> float:
+    if d == 1.0:
+        return p
+    return clamp(inv_logit(d * logit(p)))
+
+
+def debias(p: float) -> float:
+    return clamp(inv_logit(logit(p) + DEBIAS_LOGIT))
+
+
 def weather_adjust(p: float) -> float:
-    """Sigmoid recalibration that fixes systematic underforecasting on weather events."""
-    slope, intercept = 0.15, -1.386
-    x = max(-500.0, min(500.0, slope * p + intercept))
-    return clamp(1.0 / (1.0 + math.exp(-x)))
+    return clamp(inv_logit(logit(p) + 0.30))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Probability parsing
+# Probability parsing (enhanced — handles more formats from various LLMs)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def parse_prob(txt: str) -> float | None:
     if not txt:
         return None
-    # JSON keys
-    for key in ("prediction", "probability", "confidence", "forecast", "prob", "p"):
+    for key in ("prediction", "probability", "confidence", "forecast", "prob", "p", "likelihood", "final_probability"):
         hit = re.search(rf'["\']?{key}["\']?\s*:\s*([\d.]+)', txt, re.I)
         if hit:
             v = float(hit.group(1))
             return clamp(v / 100.0 if v > 1.5 else v)
-    # Tagged output
     hit = re.search(r'PREDICTION\s*:\s*([\d.]+)', txt, re.I)
     if hit:
         v = float(hit.group(1))
         return clamp(v / 100.0 if v > 1.5 else v)
-    # Bare decimal
+    hit = re.search(r'(?:estimate|forecast|likelihood)\s*:\s*(?:is\s+)?([\d.]+)', txt, re.I)
+    if hit:
+        v = float(hit.group(1))
+        return clamp(v / 100.0 if v > 1.5 else v)
     decimals = re.findall(r'\b(0\.\d{2,4})\b', txt)
     if decimals:
         return clamp(float(decimals[-1]))
-    # Percentage
     pcts = re.findall(r'\b(\d{1,3}(?:\.\d)?)\s*%', txt)
     if pcts:
         return clamp(float(pcts[-1]) / 100.0)
@@ -168,7 +243,7 @@ def parse_prob(txt: str) -> float | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HTTP
+# HTTP helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def post_retry(client, url, body, timeout=90, attempts=3):
@@ -182,13 +257,34 @@ async def post_retry(client, url, body, timeout=90, attempts=3):
             return r.json()
         except Exception as exc:
             if i == attempts - 1:
-                print(f"[v8] post_retry failed {url}: {exc}")
+                print(f"[v8.1] post_retry failed {url}: {exc}")
             await asyncio.sleep(2 ** i)
     return None
 
 
+def crawl_sync(url, timeout=25.0):
+    for attempt in range(3):
+        try:
+            resp = httpx.post(PATH_CRAWL, json={"url": url, "run_id": RUN_ID}, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("content", "")
+            if not content:
+                return None
+            return json.loads(content) if isinstance(content, str) else content
+        except Exception:
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            return None
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Polymarket — events API (exact match approach)
+# Polymarket — via Desearch crawl (more reliable in sandbox, used by #1 miner)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _jaccard(a: str, b: str) -> float:
@@ -207,7 +303,6 @@ def _keywords(title: str, n: int = 8) -> str:
 
 
 def _yes_price(market: dict) -> float | None:
-    # Try outcomePrices field first
     op = market.get("outcomePrices")
     if op:
         try:
@@ -216,7 +311,6 @@ def _yes_price(market: dict) -> float | None:
                 return clamp(float(arr[0]))
         except (json.JSONDecodeError, ValueError, IndexError):
             pass
-    # Try tokens
     for tok in market.get("tokens") or []:
         if str(tok.get("outcome", "")).upper() == "YES":
             raw = tok.get("price")
@@ -226,13 +320,9 @@ def _yes_price(market: dict) -> float | None:
 
 
 async def polymarket_signal(client, title: str) -> tuple[float | None, float]:
-    """
-    Returns (yes_price, match_quality).
-    Tries /public-search events API first (exact match), falls back to /markets.
-    """
     kw = _keywords(title)
 
-    # Strategy 1: events search (same as top miner)
+    # Strategy 1: events search via direct API (fast)
     try:
         r = await client.get(
             GAMMA_API + "/public-search",
@@ -252,12 +342,12 @@ async def polymarket_signal(client, title: str) -> tuple[float | None, float]:
                         best_quality = q
                         best_price = p
         if best_price is not None and best_quality >= 0.25:
-            print(f"[v8] Polymarket (events): {best_price:.3f} quality={best_quality:.2f}")
+            print(f"[v8.1] PM (events): {best_price:.3f} q={best_quality:.2f}")
             return best_price, best_quality
     except Exception as e:
-        print(f"[v8] Polymarket events API error: {e}")
+        print(f"[v8.1] PM events error: {e}")
 
-    # Strategy 2: /markets fallback
+    # Strategy 2: /markets fallback via direct API
     try:
         r = await client.get(
             GAMMA_API + "/markets",
@@ -273,12 +363,72 @@ async def polymarket_signal(client, title: str) -> tuple[float | None, float]:
             if q >= 0.25:
                 p = _yes_price(top)
                 if p is not None:
-                    print(f"[v8] Polymarket (markets): {p:.3f} quality={q:.2f}")
+                    print(f"[v8.1] PM (markets): {p:.3f} q={q:.2f}")
                     return p, q
     except Exception as e:
-        print(f"[v8] Polymarket markets API error: {e}")
+        print(f"[v8.1] PM markets error: {e}")
+
+    # Strategy 3: Desearch crawl fallback (used by #1 miner as primary)
+    try:
+        url = f"{GAMMA_API}/public-search?q={kw}"
+        data = crawl_sync(url, timeout=20.0)
+        if data:
+            events = data.get("events") or []
+            best_price, best_quality = None, 0.0
+            for ev in events:
+                for m in ev.get("markets") or []:
+                    q = _jaccard(title, m.get("question", ""))
+                    if q > best_quality:
+                        p = _yes_price(m)
+                        if p is not None:
+                            best_quality = q
+                            best_price = p
+            if best_price is not None and best_quality >= 0.25:
+                print(f"[v8.1] PM (crawl): {best_price:.3f} q={best_quality:.2f}")
+                return best_price, best_quality
+    except Exception as e:
+        print(f"[v8.1] PM crawl error: {e}")
 
     return None, 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Indicia OSINT (from #1 miner — LiveUAMap + X-OSINT for geo events)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def fetch_indicia(client, city: str | None, title: str) -> str:
+    signals = []
+    for endpoint in ("/liveuamap", "/x-osint"):
+        try:
+            r = await client.post(
+                PATH_INDICIA + endpoint,
+                json={"run_id": RUN_ID, "limit": 20},
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
+            for s in data.get("signals", []):
+                signals.append(
+                    f"[{s.get('category','')}] {s.get('signal','')} "
+                    f"(confidence={s.get('confidence','')}, {s.get('timestamp','')})"
+                )
+        except Exception as e:
+            print(f"[v8.1] Indicia {endpoint} error: {e}")
+
+    if not signals:
+        return ""
+
+    text = "\n".join(signals[:30])
+    if city:
+        city_lower = city.lower()
+        relevant = [s for s in signals if city_lower in s.lower()]
+        if relevant:
+            text = f"Signals mentioning {city}:\n" + "\n".join(relevant[:15]) + "\n\nAll signals:\n" + "\n".join(signals[:15])
+        else:
+            text = f"No signals mention {city} specifically.\n\nAll signals:\n" + "\n".join(signals[:20])
+
+    print(f"[v8.1] Indicia: {len(signals)} signals")
+    return text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -288,10 +438,10 @@ async def polymarket_signal(client, title: str) -> tuple[float | None, float]:
 _GEO_RULES = [
     (re.compile(r"more than \d+(?:\s+\S+){0,3}\s+drone", re.I),    "more_than_N_drones",  0.96),
     (re.compile(r"more than \d+(?:\s+\S+){0,3}\s+strike", re.I),   "more_than_N_strikes", 0.99),
-    (re.compile(r"without any strike|strike-free|no strikes", re.I),"strike_free",         0.01),
+    (re.compile(r"without any strike|strike-free|strike free|hours without|no strikes", re.I), "strike_free", 0.01),
     (re.compile(r"energy grid.*directly hit", re.I),                 "energy_grid_hit",     0.08),
-    (re.compile(r"port.*(?:infrastructure|harbor)|shipyard.*target", re.I), "port_infra",  0.01),
-    (re.compile(r"(?:railway|bridge).*targeted|hospital.*(?:hit|strike)", re.I), "other_infra", 0.01),
+    (re.compile(r"port.*(?:infrastructure|harbor|shipyard)|(?:harbor|shipyard).*targeted", re.I), "port_infra", 0.01),
+    (re.compile(r"(?:railway|bridge).*(?:infrastructure|targeted|directly hit)|(?:strike|hit).*hospital|hospital.*(?:hit|strike|targeted)", re.I), "other_infra", 0.01),
     (re.compile(r"(?:energy|power).*(?:infrastructure|targeted)", re.I), "energy_infra",  0.09),
     (re.compile(r"residential", re.I),                               "residential",        0.05),
     (re.compile(r"drone strike", re.I),                              "drone_strike",        0.89),
@@ -348,7 +498,6 @@ def geo_leash(prob: float, anchor: float) -> float:
 # App store specialist
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Incumbent table: (store_type, rank) -> (primary_app, win_rate)
 _APP_INCUMBENTS = {
     ("Free",  1): ("ChatGPT",               0.92),
     ("Free",  2): ("Google Gemini",         0.24),
@@ -409,12 +558,10 @@ def app_incumbent_prior(title: str) -> float | None:
     if primary and app == primary.lower():
         return win_rate
 
-    # Check secondary incumbents
     for sec_app, sec_rate in _APP_SECONDARY.get(key, []):
         if app == sec_app.lower():
             return sec_rate
 
-    # Unknown app at this slot
     return 0.05
 
 
@@ -459,12 +606,28 @@ Forecasting discipline:
 Output format — respond with ONLY a valid JSON object:
 {"prediction": 0.XX}"""
 
+_SYS_GEO = """\
+You are an expert forecaster for military conflict events. Estimate P(YES).
+You are given a STATIC ANCHOR based on historical resolution rates for this question type.
+The anchor is your PRIMARY signal — it reflects the base rate from hundreds of similar events.
+You also receive live conflict data from OSINT sources.
+RULES:
+- Default to the anchor unless live data provides CONCRETE evidence for today specifically.
+- 'No signals for location' may mean lower activity — consider lowering prediction.
+- 'Multiple confirmed strikes today' — consider raising prediction.
+- Vague news articles are NOT sufficient reason to deviate from anchor.
+- Never return exactly 0 or 1, use [0.01, 0.99].
+OUTPUT FORMAT:
+PREDICTION: [0.01-0.99]
+REASONING: [Anchor value, live data assessment, adjustment rationale, 2-3 sentences]"""
 
-async def oai_signal(client, question: str, cutoff: str) -> float | None:
+
+async def oai_signal(client, question: str, cutoff: str, system: str = _SYS_GENERAL, tools=None) -> float | None:
+    if tools is None:
+        tools = [{"type": "web_search_preview"}]
     prompt = (
         f"Forecasting question: {question}\n"
-        f"Resolution cutoff: {cutoff}\n"
-        f"Today: {UTC_TODAY}\n\n"
+        f"Resolution cutoff: {cutoff}\n\n"
         "Search for current information, apply reference-class forecasting, then output:\n"
         "PREDICTION: [0.01-0.99]\n"
         "REASONING: [your analysis]"
@@ -474,10 +637,11 @@ async def oai_signal(client, question: str, cutoff: str) -> float | None:
         {
             "model": MODEL_OAI_PRIMARY,
             "input": [{"role": "user", "content": prompt}],
-            "instructions": _SYS_GENERAL,
-            "tools": [{"type": "web_search_preview"}],
+            "instructions": system,
+            "tools": tools,
             "max_output_tokens": 400,
-            "metadata": {"session": SESSION},
+            "run_id": RUN_ID,
+            "reasoning": {"effort": "medium"},
         },
         timeout=90, attempts=2,
     )
@@ -496,7 +660,7 @@ async def chutes_signal(client, question: str, context: str, cutoff: str,
                          model: str = MODEL_CHUTES_PRIMARY) -> float | None:
     user_msg = (
         f"Question: {question}\n"
-        f"Cutoff: {cutoff}\nToday: {UTC_TODAY}\n\n"
+        f"Cutoff: {cutoff}\n\n"
         f"Evidence:\n{context[:3000]}\n\n"
         'Respond ONLY with: {"prediction": 0.XX}'
     )
@@ -511,8 +675,39 @@ async def chutes_signal(client, question: str, context: str, cutoff: str,
             "max_tokens": 150,
             "temperature": 0,
             "stream": False,
+            "run_id": RUN_ID,
         },
         timeout=90, attempts=3,
+    )
+    if not data:
+        return None
+    txt = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    return parse_prob(txt)
+
+
+async def openrouter_signal(client, question: str, context: str, cutoff: str) -> float | None:
+    if _budget_left() < 30:
+        return None
+    user_msg = (
+        f"Forecasting question: {question}\n"
+        f"Resolution cutoff: {cutoff}\n\n"
+        f"Evidence:\n{context[:2000]}\n\n"
+        "Estimate the probability this event resolves YES. "
+        'Respond with ONLY: {"prediction": 0.XX}'
+    )
+    data = await post_retry(
+        client, PATH_OPENROUTER,
+        {
+            "model": MODEL_OPENROUTER,
+            "messages": [
+                {"role": "system", "content": _SYS_CHUTES},
+                {"role": "user", "content": user_msg},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 200,
+            "run_id": RUN_ID,
+        },
+        timeout=60, attempts=2,
     )
     if not data:
         return None
@@ -524,33 +719,63 @@ async def chutes_signal(client, question: str, context: str, cutoff: str,
 # Routing logic
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def run_geo_strikes(record: dict) -> float:
+async def run_geo_strikes(record: dict, client) -> float:
     title = record.get("title", "")
+    cutoff = str(record.get("cutoff", ""))
     anchor, qtype = geo_anchor(title)
-    print(f"[v8] geo_strikes anchor={anchor:.2f} qtype={qtype}")
-    # Static anchor is primary signal — no LLM for geo
+    city = _geo_city(title)
+    print(f"[v8.1] geo_strikes anchor={anchor:.2f} qtype={qtype} city={city}")
+
+    indicia_data = await fetch_indicia(client, city, title)
+
+    if indicia_data:
+        geo_prompt = (
+            f"EVENT TO FORECAST:\nTitle: {title}\n"
+            f"Cutoff: {cutoff}\n\n"
+            f"STATIC ANCHOR (primary signal): {anchor:.2f} (type={qtype})\n\n"
+            f"LIVE CONFLICT DATA:\n{indicia_data[:3000]}"
+        )
+        data = await post_retry(
+            client, PATH_OAI,
+            {
+                "model": MODEL_OAI_PRIMARY,
+                "input": [{"role": "user", "content": geo_prompt}],
+                "instructions": _SYS_GEO,
+                "max_output_tokens": 300,
+                "run_id": RUN_ID,
+            },
+            timeout=60, attempts=2,
+        )
+        if data:
+            for block in data.get("output") or []:
+                if block.get("type") == "message":
+                    for part in block.get("content") or []:
+                        p = parse_prob(part.get("text", ""))
+                        if p is not None:
+                            leashed = geo_leash(p, anchor)
+                            print(f"[v8.1] geo LLM+Indicia → {p:.3f} leashed={leashed:.3f}")
+                            return leashed
+
     return anchor
 
 
 async def run_iran_diplomatic(_record: dict) -> float:
-    print("[v8] iran_diplomatic → 0.05")
-    return 0.05
+    print("[v8.1] iran_diplomatic → 0.15")
+    return 0.15
 
 
 async def run_app_store(record: dict, client) -> float:
     title = record.get("title", "")
     prior = app_incumbent_prior(title)
     if prior is not None:
-        print(f"[v8] app_store incumbent prior={prior:.2f}")
-        # Try to get Polymarket slot data to refine
+        print(f"[v8.1] app_store incumbent prior={prior:.2f}")
         pm_price, pm_q = await polymarket_signal(client, title)
         if pm_price is not None and pm_q >= 0.30:
             result = geo_pool([prior, pm_price], [1.5, pm_q * 3.0])
-            print(f"[v8] app_store pool prior={prior:.2f} pm={pm_price:.2f} → {result:.3f}")
+            print(f"[v8.1] app_store pool prior={prior:.2f} pm={pm_price:.2f} → {result:.3f}")
             return result
         return prior
-    # Unknown app — fall through to general
-    print("[v8] app_store unknown app → general flow")
+    print("[v8.1] app_store unknown app → general flow")
     return await run_general(record, client)
 
 
@@ -564,7 +789,7 @@ async def run_weather(record: dict, client) -> float:
         oai = await oai_signal(client, title, cutoff)
         raw = oai if oai is not None else BASE_RATE
     adjusted = weather_adjust(raw)
-    print(f"[v8] weather raw={raw:.3f} sigmoid_adjusted={adjusted:.3f}")
+    print(f"[v8.1] weather raw={raw:.3f} adjusted={adjusted:.3f}")
     return adjusted
 
 
@@ -573,19 +798,16 @@ async def run_general(record: dict, client) -> float:
     desc   = record.get("description", "") or ""
     cutoff = str(record.get("cutoff", ""))
 
-    # Parallel: Polymarket + OAI web search
     pm_task  = asyncio.create_task(polymarket_signal(client, title))
     oai_task = asyncio.create_task(oai_signal(client, title, cutoff))
 
     pm_price, pm_q = await pm_task
     oai_est        = await oai_task
 
-    # Fast path: near-certain Polymarket match
     if pm_price is not None and pm_q >= 0.65 and (pm_price <= 0.05 or pm_price >= 0.95):
-        print(f"[v8] fast-path Polymarket {pm_price:.3f}")
+        print(f"[v8.1] fast-path PM {pm_price:.3f}")
         return pm_price
 
-    # Build context for Chutes
     ctx_parts = []
     if pm_price is not None:
         ctx_parts.append(f"Polymarket YES price: {pm_price:.3f} (match quality: {pm_q:.2f})")
@@ -595,20 +817,26 @@ async def run_general(record: dict, client) -> float:
         ctx_parts.append(f"Description: {desc[:500]}")
     context = "\n\n".join(ctx_parts) or "No structured data available."
 
-    chutes_est = await chutes_signal(client, title, context, cutoff)
+    chutes_task = asyncio.create_task(chutes_signal(client, title, context, cutoff))
+    or_task = asyncio.create_task(openrouter_signal(client, title, context, cutoff))
+
+    chutes_est = await chutes_task
     if chutes_est is None:
         chutes_est = await chutes_signal(client, title, context, cutoff, model=MODEL_CHUTES_FALLBACK)
 
-    print(f"[v8] signals — PM: {pm_price}, OAI: {oai_est}, Chutes: {chutes_est}")
+    or_est = await or_task
 
-    # Weighted pool
+    print(f"[v8.1] signals — PM:{pm_price} OAI:{oai_est} Chutes:{chutes_est} OR:{or_est}")
+
     votes, weights = [], []
     if pm_price is not None:
         votes.append(pm_price);    weights.append(4.0 * pm_q)
     if oai_est is not None:
-        votes.append(oai_est);     weights.append(2.0)
+        votes.append(oai_est);     weights.append(2.5)
     if chutes_est is not None:
         votes.append(chutes_est);  weights.append(1.5)
+    if or_est is not None:
+        votes.append(or_est);      weights.append(1.0)
 
     if not votes:
         return BASE_RATE
@@ -624,15 +852,15 @@ async def run_general(record: dict, client) -> float:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def agent_main(event_data: dict) -> dict:
-    """Required entry point for Numinous SN6 validator sandbox."""
+    global _start_time
+    _start_time = time.time()
 
     eid     = event_data.get("event_id", "unknown")
     title   = event_data.get("title", "")
     segment = classify_segment(event_data)
 
-    print(f"[v8] segment={segment} title={title[:80]}")
+    print(f"[v8.1] segment={segment} title={title[:80]}")
 
-    # Normalise cutoff timestamp
     raw_cutoff = event_data.get("cutoff")
     if isinstance(raw_cutoff, str):
         try:
@@ -644,13 +872,12 @@ def agent_main(event_data: dict) -> dict:
             pass
 
     async def _run() -> float:
-        # Geo and Iran diplomatic don't need an HTTP client
-        if segment == "geo_strikes":
-            return await run_geo_strikes(event_data)
         if segment == "iran_diplomatic":
             return await run_iran_diplomatic(event_data)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(30)) as client:
+            if segment == "geo_strikes":
+                return await run_geo_strikes(event_data, client)
             if segment == "app_store":
                 return await run_app_store(event_data, client)
             if segment == "weather":
@@ -660,14 +887,19 @@ def agent_main(event_data: dict) -> dict:
     try:
         prob = asyncio.run(_run())
     except Exception as exc:
-        print(f"[v8] Fatal error: {exc}")
+        print(f"[v8.1] Fatal error: {exc}")
         prob = BASE_RATE
 
     prob = clamp(prob)
-    print(f"[v8] Final prediction: {prob:.4f}")
+    prob = extremize(prob, EXTREMIZE_D)
+    prob = debias(prob)
+    prob = clamp(prob)
+
+    elapsed = time.time() - _start_time
+    print(f"[v8.1] Final: {prob:.4f} ({elapsed:.1f}s)")
 
     return {
         "event_id":   eid,
         "prediction": prob,
-        "reasoning":  f"v8 segment={segment} prediction={prob:.3f}",
+        "reasoning":  f"v8.1 seg={segment} p={prob:.3f}",
     }
